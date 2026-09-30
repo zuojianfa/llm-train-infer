@@ -35,16 +35,39 @@ class ChatRequest(BaseModel):
     top_p: float | None = 0.9
     top_k: int | None = 50
     stream: bool = False
-    # 该模型是基座(未对齐),默认不做模板拼接,直接续写最后一条 user 消息
+    # 基座模型(未对齐)默认 False,直接续写最后一条 user 消息;
+    # SFT 微调后的模型传 chatml=True,套用与训练一致的 "用户:/助手:" 模板
+    chatml: bool = False
 
 
-def format_prompt(messages: list[ChatMessage]) -> str:
-    """把对话拼成续写 prompt。基座模型无指令微调,简单取最后一条用户输入。"""
-    last_user = [m for m in messages if m.role == "user"]
-    return last_user[-1].content if last_user else ""
+def format_prompt(messages: list[ChatMessage], chatml: bool = False) -> str:
+    """把对话拼成续写 prompt。
+
+    两种模式(对应模型的两种形态):
+      * 基座模型(chatml=False,默认):没有对齐过任何模板,直接取最后一条
+        用户输入做"续写",最不容易触发分布外行为;
+      * SFT 模型(chatml=True):使用与 minillm/sft.py::format_example 完全相同
+        的模板 —— "用户:{q}\\n助手:"。训练/推理模板必须逐字符一致,否则
+        模型看到的上下文分布和训练时不同,回答质量会明显劣化
+        (这是新手做微调最常见的 bug 之一)。多轮对话把所有历史轮都拼进去。
+    """
+    if not chatml:
+        last_user = [m for m in messages if m.role == "user"]
+        return last_user[-1].content if last_user else ""
+    parts = []
+    for m in messages:
+        if m.role == "user":
+            parts.append(f"用户:{m.content}\n")
+        elif m.role == "assistant":
+            # 历史 assistant 轮作为上下文保留(去掉其末尾换行差异,统一由模板控制)
+            parts.append(f"助手:{m.content}\n")
+    parts.append("助手:")                    # 引导模型从"助手:"后开始续写
+    return "".join(parts)
 
 
-def create_app(model: LLMModel, tokenizer: BPETokenizer, device, dtype) -> FastAPI:
+def create_app(model: LLMModel, tokenizer: BPETokenizer, device, dtype,
+               chatml: bool = False) -> FastAPI:
+    """构建推理服务。chatml=True 表示挂载 SFT 模型,请求默认套用对话模板。"""
     app = FastAPI(title="minillm", version="0.1.0")
     gen = Generator(model, tokenizer, device, dtype)
 
@@ -70,7 +93,8 @@ def create_app(model: LLMModel, tokenizer: BPETokenizer, device, dtype) -> FastA
     def chat_completions(req: ChatRequest):
         cid = "chatcmpl-" + uuid.uuid4().hex[:24]
         created = int(time.time())
-        prompt = format_prompt(req.messages)
+        # 请求级 chatml 优先;未显式指定时跟随服务挂载模式(create_app 的 chatml)
+        prompt = format_prompt(req.messages, chatml=req.chatml or chatml)
 
         if req.stream:
             def sse() -> Iterator[str]:

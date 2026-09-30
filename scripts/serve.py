@@ -34,6 +34,8 @@ def main():
     ap.add_argument("--device", default="auto")
     ap.add_argument("--dtype", default="float32", choices=["bfloat16", "float32", "float16"],
                     help="CPU 服务建议 float32")
+    ap.add_argument("--chatml", action="store_true",
+                    help="挂载的是 SFT 模型:请求按 \"用户:/助手:\" 模板拼 prompt(与训练一致)")
     args = ap.parse_args()
 
     device = get_device(args.device)
@@ -41,9 +43,9 @@ def main():
 
     tok = BPETokenizer.load(args.tokenizer)
     model, step = load_model(args.ckpt, device, dtype)
-    print(f"[serve] ckpt={args.ckpt} step={step} device={device} dtype={dtype}")
+    print(f"[serve] ckpt={args.ckpt} step={step} device={device} dtype={dtype} chatml={args.chatml}")
 
-    app = create_app(model, tok, device, dtype)
+    app = create_app(model, tok, device, dtype, chatml=args.chatml)
     uvicorn.run(app, host=args.host, port=args.port)
 
 
