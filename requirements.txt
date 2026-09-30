@@ -1,0 +1,15 @@
+# ===== 核心依赖（训练 / 推理 / 分词器）=====
+torch>=2.1            # 模型、训练、生成全部基于 PyTorch
+numpy>=1.24           # RoPE 频率表、采样辅助计算
+
+# ===== HTTP 服务（scripts/serve.py）=====
+fastapi>=0.100        # OpenAI 兼容接口框架
+uvicorn>=0.23         # ASGI 服务器
+pydantic>=2.0         # 请求/响应模型校验
+
+# ===== 测试（tests/）=====
+pytest>=7.4           # 单元测试套件
+httpx>=0.24           # fastapi TestClient 依赖
+
+# ===== 可选：在线语料下载（scripts/prepare_data.py，失败自动回退离线语料）=====
+datasets>=2.14

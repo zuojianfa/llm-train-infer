@@ -1,7 +1,6 @@
+out/
+data/*.jsonl
 __pycache__/
 *.pyc
-out/
-data/
-tests/.tmp_*/
 .pytest_cache/
 *.log
