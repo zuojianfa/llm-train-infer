@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata  # 按 Unicode 类别过滤 BMP 原子符号(见 _bmp_atoms)
 from collections import Counter
 from pathlib import Path
 
@@ -55,21 +56,41 @@ _BMP_EXCLUDE = set("\n\r")  # 换行/回车是预切分边界,不进入词表(�
 def _bmp_atoms() -> str:
     """BMP 全部可打印码点(U+0000..U+FFFF),剔除换行类控制符与已用的哨兵冲突。
 
-    注意 U+00A0(NBSP)已被用作空格哨兵 SPACE——它本来就在 BMP 里,
-    入表一次即可,无需特判:哨兵与普通字符共享同一张词表。
+    注意 U+00A0(NBSP)已被用作空格哨兵 SPACE。它的 Unicode 类别是 Zs
+    (空格分隔符),若按下面的"剔除所有 Z 类"规则会被误删——而一旦 SPACE
+    不在词表中,任何含空格的文本编码时都会退化成 <unk>,往返彻底失效。
+    因此过滤条件里显式放行 SPACE:哨兵与普通字符共享同一张词表,入表一次即可。
 
-    实现细节(两个坑):
+    实现细节(三个坑):
       1. 孤立代理码点(D800-DFFF)在 Python 字符串里是"合法字符",但无法
          被 UTF-8 编码 —— 它们作为 emoji 的编码载体必须留在**内存词表**中,
-         由 save() 的 \\uXXXX 转义负责落盘,这里不做剔除;
-      2. Cc/Cf/Co/Zl/Zp 等控制与格式类字符(如 U+0000 NUL、U+FEFF BOM)
+         由 save() 的 \\uXXXX 转义负责落盘,这里不做剔除(Cs 类显式放行);
+      2. Cc/Cf/Zl/Zp 等控制与格式类字符(如 U+0000 NUL、U+FEFF BOM)
          几乎不会出现在正常文本里,却会让词表虚胖并可能干扰 JSON/终端输出,
-         直接排除。代价:这类字符会退化为 <unk>(实践中无影响)。
+         直接排除。代价:这类字符会退化为 <unk>(实践中无影响);
+      3. Zs 类不能一刀切:普通空格 U+0020 确实不该入表(split_word 会把
+         它转成 SPACE 哨兵),但 SPACE 本身(U+00A0)同属 Zs,必须保留。
+
+    注意:Cn(未分配码点)与 Co(私有使用区)**不在兜底集内**(有意取舍,
+    见 _BMP_EXCLUDE_NOTE)——随机生成含这类码点的文本会产生 <unk>;
+    真实语料中它们几乎不存在,单元测试应据此划定无损域。
     """
     return "".join(
         ch for ch in (chr(c) for c in range(0x10000))
-        if ch not in _BMP_EXCLUDE and unicodedata.category(ch)[0] not in ("C", "Z")
+        if ch not in _BMP_EXCLUDE
+        and (ch == SPACE or unicodedata.category(ch) == "Cs"
+             or unicodedata.category(ch)[0] not in ("C", "Z"))
     )
+
+
+# 兜底集的完整覆盖范围说明(供测试与文档引用):
+#   无损域 = BMP 中类别首字母非 C/Z 的已分配码点 ∪ Cs 代理对 ∪ SPACE(U+A0)
+#            ∪ 训练语料中出现过的任意字符(basic_symbols 会并入语料字符)。
+#   例外域 = Cc/Cf/Cn/Co/Zl/Zp 等(除 SPACE):退化为 <unk>,不承诺无损。
+_BMP_EXCLUDE_NOTE = (
+    "atoms cover assigned printable BMP + surrogates + NBSP sentinel; "
+    "Cc/Cf/Cn/Co/Zl/Zp fall back to <unk> unless present in corpus"
+)
 
 
 _BASE_ATOMS = _bmp_atoms()
