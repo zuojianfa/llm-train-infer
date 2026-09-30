@@ -115,7 +115,9 @@ def load_model(ckpt_dir: str, device: torch.device,
     d = Path(ckpt_dir)
     cfg = ModelConfig.load(str(d / "meta.json"))
     model = LLMModel(cfg)
-    state = torch.load(d / "model.pt", map_location="cpu")
+    # 本地 checkpoint 含非 tensor 对象(step 等),且 optim.pt 还带 numpy RNG,
+    # torch>=2.6 默认 weights_only=True 会反序列化失败,故显式置 False(可信本地文件)。
+    state = torch.load(d / "model.pt", map_location="cpu", weights_only=False)
     model.load_state_dict(state["model"])
     step = state.get("step", 0)
     model.to(device=device, dtype=dtype)
@@ -127,14 +129,23 @@ def try_resume(ckpt_dir: str, model: LLMModel, optimizer: torch.optim.Optimizer,
                device: torch.device) -> int:
     """存在 optim.pt 则恢复训练状态,返回已完成步数;否则返回 0(从头训练)。
 
-    恢复内容:Adam 的一阶/二阶矩、当前 step、numpy/torch RNG——
-    缺任何一样,"续训"都不等价于"没中断过"。
+    恢复内容:模型权重(model.pt)、Adam 的一阶/二阶矩、当前 step、
+    numpy/torch RNG——缺任何一样,"续训"都不等价于"没中断过"。
     """
     p = Path(ckpt_dir) / "optim.pt"
     if not p.exists():
         return 0
-    st = torch.load(p, map_location=device)
+    # optim.pt 含 numpy/torch RNG 状态,torch>=2.6 默认 weights_only=True 会因
+    # numpy global 不在白名单而报错;本地可信 checkpoint 显式置 False。
+    st = torch.load(p, map_location=device, weights_only=False)
     optimizer.load_state_dict(st["optimizer"])
+    # 关键:同时恢复模型权重(model.pt),否则续训带着全新随机权重继续,
+    # "断点续训"形同虚设。load 用 cpu 再 .to(device) 以跨设备兼容(与 load_model 一致)。
+    ckpt_path = Path(ckpt_dir) / "model.pt"
+    if ckpt_path.exists():
+        mw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        model.load_state_dict(mw["model"])
+        model.to(device=device)
     rng = st.get("rng", {})
     if isinstance(rng.get("numpy"), tuple) or rng.get("numpy") is not None:
         try:

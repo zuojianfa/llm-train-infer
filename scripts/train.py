@@ -32,17 +32,22 @@ def main():
     ap.add_argument("--val", default="data/val.txt")
     ap.add_argument("--tokenizer", default="out/tokenizer.json")
     # 模型规模
-    ap.add_argument("--dim", type=int, default=None)
-    ap.add_argument("--num-layers", type=int, default=None)
-    ap.add_argument("--num-heads", type=int, default=None)
-    ap.add_argument("--num-kv-heads", type=int, default=None)
+    ap.add_argument("--dim", "--hidden", type=int, default=None,
+                    help="隐藏层维度(别名 --hidden)")
+    ap.add_argument("--num-layers", "--layers", type=int, default=None,
+                    help="Transformer 层数(别名 --layers)")
+    ap.add_argument("--num-heads", "--heads", type=int, default=None,
+                    help="注意力头数(别名 --heads)")
+    ap.add_argument("--num-kv-heads", "--kv-heads", type=int, default=None,
+                    help="GQA 的 KV 头数(别名 --kv-heads)")
     ap.add_argument("--hidden-dim", type=int, default=None)
     ap.add_argument("--max-seq-len", type=int, default=None)
     # 优化
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--weight-decay", type=float, default=None)
     ap.add_argument("--warmup-steps", type=int, default=None)
-    ap.add_argument("--max-steps", type=int, default=None)
+    ap.add_argument("--max-steps", "--steps", type=int, default=None,
+                    help="最大训练步数(别名 --steps)")
     ap.add_argument("--batch-size", type=int, default=None)
     ap.add_argument("--seq-len", type=int, default=None)
     ap.add_argument("--grad-accum", type=int, default=None)

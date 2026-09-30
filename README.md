@@ -52,15 +52,15 @@ python scripts/train.py --hidden 256 --layers 4 --heads 4 --kv-heads 2 \
     --steps 300 --batch-size 8 --seq-len 256 --lr 3e-4 --out-dir out/smoke
 
 # ④ 评估验证集困惑度
-python scripts/eval.py --ckpt out/smoke/best
+python scripts/eval.py --ckpt out/smoke/ckpt
 
 # ⑤ 文本生成（可加 --stream 流式输出）
-python scripts/generate.py --ckpt out/smoke/best --prompt "人工智能" --max-new-tokens 64
 
+python scripts/generate.py --ckpt out/smoke/ckpt --prompt "人工智能" --max-new-tokens 64
 # ⑥ SFT 监督微调 + 部署
 python scripts/prepare_sft_data.py
-python scripts/train_sft.py --init-ckpt out/smoke/best --out-dir out/sft --epochs 2
-python scripts/serve.py --ckpt out/sft/best --chatml &     # http://127.0.0.1:8000
+python scripts/train_sft.py --init-ckpt out/smoke/ckpt --out-dir out/sft --epochs 2
+python scripts/serve.py --ckpt out/sft/ckpt --chatml &     # http://127.0.0.1:8000
 curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \

@@ -95,10 +95,14 @@ def test_save_load_roundtrip(tiny_tokenizer, tmp_path):
 
 # ------------------------------------------------------------------ 符号层
 def test_split_word_reversible():
-    """split_word 的模块内约定:拼回去(哨兵换回空格)== 原词。"""
-    for w in ["hello world", "  spaced  ", "中文 abc123 !", f"a{SPACE}b"]:
+    """split_word 对含普通空格的文本可逆:拼回去(哨兵换回空格)== 原词。"""
+    for w in ["hello world", "  spaced  ", "中文 abc123 !"]:
         syms = split_word(w)
         assert "".join(syms).replace(SPACE, " ") == w
+    # 原生哨兵(U+00A0):split_word 按 isspace 分支原样保留(注释里明确"不能映射
+    # 到 SPACE 否则 decode 错还原破坏往返"),故直接拼回即得原字符,无需 replace。
+    w = f"a{SPACE}b"
+    assert "".join(split_word(w)) == w
 
 
 def test_pretokenize_drops_empty_lines():

@@ -273,6 +273,13 @@ class LLMModel(nn.Module):
           推理:start_pos=已有长度, caches=各层 (K,V) -> 显式掩码 + KV 拼接
         """
         B, S = tokens.shape
+        # 位置上界检查:RoPE 表只预计算了 max_seq_len 个位置,start_pos + S 超过
+        # 它会让 cos/sin 切片变短而"静默"用错位置编码(输出错但不会报错)。显式
+        # 抛出,让超序列使用尽早失败而非产生不可靠的 logits。
+        if start_pos + S > self.cfg.max_seq_len:
+            raise ValueError(
+                f"序列长度 {start_pos + S} 超过 RoPE 表上限 max_seq_len={self.cfg.max_seq_len}"
+            )
         h = self.tok_embeddings(tokens)             # (B,S,dim):查表,可微
         cos_all, sin_all = self._freqs_on(h.device)
         # apply_rotary_emb 内部对传入的 cos/sin 再做 [:S] 切片,
@@ -284,14 +291,21 @@ class LLMModel(nn.Module):
         # 因果掩码:训练时 SDPA 的 is_causal 已足够;带缓存推理需要显式掩码
         mask = None
         if caches is not None:
-            total = start_pos + S
+            # 掩码列数必须等于注意力里真实的 K 总数(历史缓存长度 + 当前 chunk),
+            # 而不是 start_pos + S。两者在"从位置 0 连续生成"时恰好相等,但一旦
+            # 用空缓存从某 start_pos 跳跃续写就不同——按真实缓存长度构造才稳健。
+            cached_len = caches[0][0].shape[2]
+            total = cached_len + S
             # 掩码形状 (S, total):行=当前 chunk 的每个 query,列=全部 K 位置。
             # 用 float32 构造 -inf,SDPA 会广播到 q/k 的 dtype(bf16 下 -inf 同样有效)
             causal = torch.full((S, total), float("-inf"), device=h.device, dtype=torch.float32)
             # 规则:query i(绝对位置 start_pos+i)可以看见所有 j <= start_pos+i 的 key。
-            # 前 start_pos 列(历史缓存)对全部 query 可见 -> 置 0;
+            # 前 cached_len 列(历史缓存)对全部 query 可见 -> 置 0;
             # 后 S 列(chunk 内部)保持下三角因果 -> triu(diagonal=1) 上三角为 -inf
-            causal[:, start_pos:] = torch.triu(
+            # ⚠️ 历史列必须显式置 0:只写 causal[:, cached_len:] 会让前 cached_len 列
+            #    保持 -inf,增量解码就看不到缓存里的历史 K/V——这是经典的 KV cache bug。
+            causal[:, :cached_len] = 0.0
+            causal[:, cached_len:] = torch.triu(
                 torch.full((S, S), float("-inf"), device=h.device, dtype=torch.float32),
                 diagonal=1,
             )

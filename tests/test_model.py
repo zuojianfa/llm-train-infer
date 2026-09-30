@@ -126,9 +126,9 @@ def test_kv_cache_matches_full_forward(model):
         logits_step, caches = out
         collected.append(logits_step)
         pos += 1
-    inc = torch.cat([c if c.shape[1] == 1 else c[:, -1:] for c in
-                     [collected[0]] + [t for t in collected[1:]]], dim=1)
-    # 对齐比较:增量路径第 j 段的最后一行 == 全量路径对应位置
+    # 把整段 prefill 输出(前 4 行)与后续每一步 decode(各 1 行)按顺序拼回全长,
+    # 与一次性全量前向逐元素比对:增量解码必须与整段重算给出完全一致的 logits。
+    inc = torch.cat([collected[0]] + collected[1:], dim=1)   # (B,S,V)
     assert inc.shape[1] == S
     err = (inc - full).abs().max().item()
     assert err < 1e-4, f"KV cache diverged from full forward: max err {err}"
@@ -136,14 +136,25 @@ def test_kv_cache_matches_full_forward(model):
 
 @torch.no_grad()
 def test_start_pos_shifts_rope(model):
-    """同一 token 在不同 start_pos 下 logits 必须不同(位置真的进了 RoPE)。"""
-    x = torch.randint(0, model.cfg.vocab_size, (1, 5))
-    caches_a = model.init_cache(1, torch.device("cpu"), torch.float32)
-    _, caches_a = model(x, start_pos=0, caches=caches_a)
-    nxt = torch.randint(0, model.cfg.vocab_size, (1, 1))
-    la, _ = model(nxt, start_pos=5, caches=model.init_cache(1, torch.device("cpu"), torch.float32))
-    # 用两个独立空缓存、不同 start_pos 对比:位置窗口不同 -> 输出不同
-    lb, _ = model(nxt, start_pos=9, caches=model.init_cache(1, torch.device("cpu"), torch.float32))
+    """同一 token 在不同绝对位置(start_pos)下 logits 必须不同(位置真的进了 RoPE)。
+
+    为什么需要一段上下文:单 token 自注意力只有 1 个 key,softmax 恒为 1,
+    输出与位置无关——旧版测试误用"空缓存 + 跳跃 start_pos",既会因掩码列数
+    不匹配报错,又无法区分位置。这里让同一 nxt 分别落在绝对位置 4 和 8(各有
+    真实前文),RoPE 位置差异才会反映到 q·k 与最终 logits 上。
+    """
+    V = model.cfg.vocab_size
+    nxt = torch.randint(0, V, (1, 1))
+    # 上下文 A:4 个 token 预填充 -> nxt 落在绝对位置 4
+    ctx_a = torch.randint(0, V, (1, 4))
+    ca = model.init_cache(1, torch.device("cpu"), torch.float32)
+    _, ca = model(ctx_a, start_pos=0, caches=ca)
+    la, _ = model(nxt, start_pos=4, caches=ca)
+    # 上下文 B:8 个 token 预填充 -> 同一 nxt 落在绝对位置 8(RoPE 位置不同)
+    ctx_b = torch.randint(0, V, (1, 8))
+    cb = model.init_cache(1, torch.device("cpu"), torch.float32)
+    _, cb = model(ctx_b, start_pos=0, caches=cb)
+    lb, _ = model(nxt, start_pos=8, caches=cb)
     assert not torch.allclose(la, lb, atol=1e-6)
 
 
