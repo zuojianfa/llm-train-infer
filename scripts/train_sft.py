@@ -52,7 +52,7 @@ def main():
     ap.add_argument("--seq-len", type=int, default=256)
     ap.add_argument("--grad-accum", type=int, default=1)
     # 运行
-    ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
+    ap.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "xpu", "mps"])
     ap.add_argument("--dtype", default="bfloat16", choices=["bfloat16", "float32", "float16"])
     ap.add_argument("--out-dir", default="out-sft")
     ap.add_argument("--log-interval", type=int, default=10)

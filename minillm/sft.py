@@ -163,7 +163,7 @@ def evaluate_sft_loss(model: torch.nn.Module, dataset: SFTDataset, cfg,
         x = torch.tensor([ids[:-1]], dtype=torch.long, device=device)
         y = torch.tensor([labels[1:]], dtype=torch.long, device=device)
         with torch.autocast(device_type=device.type, dtype=dtype,
-                            enabled=(device.type in ("cuda", "mps") or dtype != torch.float32)):
+                            enabled=(device.type in ("cuda", "mps", "xpu") or dtype != torch.float32)):
             logits = model(x)
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)).float(),
                                y.view(-1), ignore_index=IGNORE_INDEX, reduction="sum")
@@ -230,7 +230,7 @@ def run_sft(cfg: TrainConfig, init_ckpt: str, data_path: str,
         for _ in range(cfg.gradient_accumulation_steps):
             x, y = train_ds.random_batch(cfg.batch_size, cfg.seq_len, device)
             with torch.autocast(device_type=device.type, dtype=dtype,
-                                enabled=(device.type in ("cuda", "mps") or dtype != torch.float32)):
+                                enabled=(device.type in ("cuda", "mps", "xpu") or dtype != torch.float32)):
                 logits = model(x[:, :-1])              # 去掉最后一个 token 作为输入
                 # 关键一行:ignore_index=-100 => prompt 段与 pad 段零贡献。
                 # .float():bf16 logits 直接进 CE 精度不足(同预训练的理由)。

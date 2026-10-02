@@ -29,10 +29,31 @@ def get_device(name: str) -> torch.device:
     if name == "auto":
         if torch.cuda.is_available():
             return torch.device("cuda")
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            return torch.device("xpu")
         if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
             return torch.device("mps")
         return torch.device("cpu")
     return torch.device(name)
+
+
+def _get_device_rng_states():
+    if torch.cuda.is_available():
+        return torch.cuda.get_rng_state_all()
+    if hasattr(torch, "xpu") and torch.xpu.is_available() and hasattr(torch.xpu, "get_rng_state_all"):
+        return torch.xpu.get_rng_state_all()
+    return None
+
+
+def _restore_device_rng_states(rng_states):
+    if rng_states is None:
+        return
+    if hasattr(torch, "xpu") and torch.xpu.is_available() and hasattr(torch.xpu, "set_rng_state_all"):
+        states = [s.to("xpu") if isinstance(s, torch.Tensor) and s.device.type != "xpu" else s for s in rng_states]
+        torch.xpu.set_rng_state_all(states)
+    elif torch.cuda.is_available():
+        states = [s.to("cuda") if isinstance(s, torch.Tensor) and s.device.type != "cuda" else s for s in rng_states]
+        torch.cuda.set_rng_state_all(states)
 
 
 def get_dtype(name: str) -> torch.dtype:
@@ -101,6 +122,7 @@ def save_checkpoint(model: LLMModel, ckpt_dir: str, step: int,
                         "numpy": np.random.get_state(),
                         "torch_cpu": torch.get_rng_state(),
                         "torch_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                        "torch_xpu": _get_device_rng_states() if hasattr(torch, "xpu") and torch.xpu.is_available() else None,
                     }},
                    d / "optim.pt")
 
@@ -125,6 +147,34 @@ def load_model(ckpt_dir: str, device: torch.device,
     return model.eval(), step
 
 
+def _is_compatible_checkpoint(model: LLMModel, ckpt_dir: str) -> bool:
+    """判断 checkpoint 的模型配置是否与当前训练配置兼容。
+
+    如果词表或架构尺寸不同,则直接拒绝恢复,避免在大 vocab 切换后用旧权重
+    覆盖新模型并产生 size mismatch。此类场景通常意味着用户更换了 tokenizer/
+    训练配置,需要清理旧 out/ckpt 或从新目录开始训练。
+    """
+    meta_path = Path(ckpt_dir) / "meta.json"
+    if not meta_path.exists():
+        return True
+
+    try:
+        ckpt_cfg = ModelConfig.load(str(meta_path))
+    except Exception:
+        return False
+
+    current = model.cfg
+    for key in (
+        "vocab_size", "dim", "num_layers", "num_heads", "num_kv_heads",
+        "hidden_dim", "max_seq_len", "rope_theta", "rms_norm_eps",
+        "tie_embeddings", "dropout"
+    ):
+        if getattr(ckpt_cfg, key) != getattr(current, key):
+            print(f"[train] checkpoint mismatch on {key}: ckpt={getattr(ckpt_cfg, key)} current={getattr(current, key)}")
+            return False
+    return True
+
+
 def try_resume(ckpt_dir: str, model: LLMModel, optimizer: torch.optim.Optimizer,
                device: torch.device) -> int:
     """存在 optim.pt 则恢复训练状态,返回已完成步数;否则返回 0(从头训练)。
@@ -135,16 +185,23 @@ def try_resume(ckpt_dir: str, model: LLMModel, optimizer: torch.optim.Optimizer,
     p = Path(ckpt_dir) / "optim.pt"
     if not p.exists():
         return 0
+    if not _is_compatible_checkpoint(model, ckpt_dir):
+        print(f"[train] skip resume from {p}: checkpoint config does not match current model")
+        return 0
     # optim.pt 含 numpy/torch RNG 状态,torch>=2.6 默认 weights_only=True 会因
     # numpy global 不在白名单而报错;本地可信 checkpoint 显式置 False。
-    st = torch.load(p, map_location=device, weights_only=False)
+    st = torch.load(p, map_location="cpu", weights_only=False)
     optimizer.load_state_dict(st["optimizer"])
     # 关键:同时恢复模型权重(model.pt),否则续训带着全新随机权重继续,
     # "断点续训"形同虚设。load 用 cpu 再 .to(device) 以跨设备兼容(与 load_model 一致)。
     ckpt_path = Path(ckpt_dir) / "model.pt"
     if ckpt_path.exists():
         mw = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        model.load_state_dict(mw["model"])
+        try:
+            model.load_state_dict(mw["model"])
+        except RuntimeError as e:
+            print(f"[train] skip resume from {ckpt_path}: incompatible checkpoint weights ({e})")
+            return 0
         model.to(device=device)
     rng = st.get("rng", {})
     if isinstance(rng.get("numpy"), tuple) or rng.get("numpy") is not None:
@@ -152,10 +209,13 @@ def try_resume(ckpt_dir: str, model: LLMModel, optimizer: torch.optim.Optimizer,
             np.random.set_state(rng["numpy"])
         except Exception:
             pass                                # numpy 版本差异导致格式不符:跳过而非崩溃
-    if rng.get("torch_cpu") is not None:
-        torch.set_rng_state(rng["torch_cpu"])
-    if rng.get("torch_cuda") and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(rng["torch_cuda"])
+    cpu_rng = rng.get("torch_cpu")
+    if isinstance(cpu_rng, torch.Tensor) and cpu_rng.dtype == torch.uint8:
+        torch.set_rng_state(cpu_rng)
+    if rng.get("torch_cuda") and device.type == "cuda" and torch.cuda.is_available():
+        _restore_device_rng_states(rng["torch_cuda"])
+    if rng.get("torch_xpu") and device.type == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+        _restore_device_rng_states(rng["torch_xpu"])
     print(f"[train] resumed from {p} at step {st['step']}")
     return st["step"]
 
@@ -220,7 +280,7 @@ def train(cfg: TrainConfig, resume: bool = True) -> None:
             x, y = train_ds.random_batch(cfg.batch_size, cfg.seq_len, device)
             # autocast:矩阵乘走 bf16(快、省显存),softmax/norm 等自动回退 fp32
             with torch.autocast(device_type=device.type, dtype=dtype,
-                                enabled=(device.type in ("cuda", "mps") or dtype != torch.float32)):
+                                enabled=(device.type in ("cuda", "mps", "xpu") or dtype != torch.float32)):
                 logits = model(x)               # (B,S,V)
                 # 交叉熵:预测 x 的下一 token(y = x 右移一位);ignore_index=-1
                 # 预留给将来可能的 padding(当前语料无 padding,纯防御)

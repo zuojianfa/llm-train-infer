@@ -13,8 +13,8 @@ import torch
 
 from minillm.config import ModelConfig, TrainConfig
 from minillm.model import LLMModel
-from minillm.train import (build_optimizer, get_dtype, get_lr, load_model,
-                           save_checkpoint, try_resume)
+from minillm.train import (build_optimizer, get_device, get_dtype, get_lr,
+                           load_model, save_checkpoint, try_resume)
 
 
 # ------------------------------------------------------------------ LR 调度
@@ -36,6 +36,14 @@ def test_get_dtype_map():
     assert get_dtype("float32") == torch.float32
     with pytest.raises(KeyError):
         get_dtype("int8")
+
+
+def test_get_device_prefers_xpu_when_available(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch, "xpu", type("XPU", (), {"is_available": staticmethod(lambda: True)}), raising=False)
+    monkeypatch.setattr(torch.backends, "mps", type("MPS", (), {"is_available": staticmethod(lambda: True)}), raising=False)
+    assert get_device("auto").type == "xpu"
+    assert get_device("xpu").type == "xpu"
 
 
 # ------------------------------------------------------------------ 优化器分组
@@ -121,3 +129,19 @@ def test_try_resume_without_optim_returns_zero(tiny_pair, tmp_path):
     save_checkpoint(m, d, step=3)                  # 不传 optimizer => 无 optim.pt
     opt = build_optimizer(m, TrainConfig())
     assert try_resume(d, m, opt, torch.device("cpu")) == 0
+
+
+def test_try_resume_skips_incompatible_vocab(tmp_path):
+    old_cfg = ModelConfig(vocab_size=40, dim=16, num_layers=1, num_heads=2,
+                          num_kv_heads=1, hidden_dim=32)
+    new_cfg = ModelConfig(vocab_size=80, dim=16, num_layers=1, num_heads=2,
+                          num_kv_heads=1, hidden_dim=32)
+
+    old_model = LLMModel(old_cfg)
+    d = str(tmp_path / "incompatible")
+    old_opt = build_optimizer(old_model, TrainConfig(lr=1e-3))
+    save_checkpoint(old_model, d, step=3, optimizer=old_opt, is_latest=True)
+
+    new_model = LLMModel(new_cfg)
+    opt = build_optimizer(new_model, TrainConfig())
+    assert try_resume(d, new_model, opt, torch.device("cpu")) == 0

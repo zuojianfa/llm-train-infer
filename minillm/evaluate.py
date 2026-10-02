@@ -32,7 +32,7 @@ def evaluate_loss(model: torch.nn.Module, dataset: TextDataset, cfg,
         x, y = dataset.random_batch(cfg.batch_size, cfg.seq_len, device)
         # 与训练完全一致的 autocast + fp32 交叉熵,保证 train/val loss 同口径可比
         with torch.autocast(device_type=device.type, dtype=dtype,
-                            enabled=(device.type in ("cuda", "mps") or dtype != torch.float32)):
+                            enabled=(device.type in ("cuda", "mps", "xpu") or dtype != torch.float32)):
             logits = model(x)
         loss = F.cross_entropy(logits.view(-1, logits.size(-1)).float(), y.view(-1))
         losses.append(loss.item())

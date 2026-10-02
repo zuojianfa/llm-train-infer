@@ -66,8 +66,8 @@ class TrainConfig:
     loss_spike_threshold: float = 5.0  # loss 尖峰回退阈值(相对 EMA 的倍数)
 
     # 运行
-    device: str = "auto"            # auto / cpu / cuda / mps
-    dtype: str = "bfloat16"         # 计算精度(bf16 在 CPU/GPU 上均可用)
+    device: str = "auto"            # auto / cpu / cuda / xpu / mps
+    dtype: str = "bfloat16"         # 计算精度(bf16 在 CPU/GPU/XPU 上均可用)
     out_dir: str = "out"
     log_interval: int = 20
     eval_interval: int = 500

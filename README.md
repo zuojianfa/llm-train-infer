@@ -47,9 +47,11 @@ python scripts/prepare_data.py
 # ② 训练 BPE 分词器（生成 out/tokenizer.json）
 python scripts/train_tokenizer.py --vocab-size 8192
 
-# ③ 预训练（冒烟配置示例，CPU 低内存可跑通）
+# ③ 预训练（冒烟配置示例，CPU / XPU / CUDA 均可跑通）
 python scripts/train.py --hidden 256 --layers 4 --heads 4 --kv-heads 2 \
     --steps 300 --batch-size 8 --seq-len 256 --lr 3e-4 --out-dir out/smoke
+# 若在 Intel XPU 上运行，可显式指定：--device xpu
+# 例如：python scripts/train.py --device xpu ...
 
 # ④ 评估验证集困惑度
 python scripts/eval.py --ckpt out/smoke/ckpt
@@ -93,7 +95,7 @@ pytest tests/ -x          # 全部离线、秒级完成
   loss mask（prompt 段置 `-100`，只学回答）；模板字符串与 `serve.py --chatml` 严格一致。
 - **KV Cache**：增量解码与全量前向数值等价（`tests/test_model.py` 中有断言），这是
   所有生产级推理加速的地基。
-- **网络形态**：单机单进程，无分布式；设备自动选择 CUDA/MPS/CPU；支持 bf16 autocast。
+- **网络形态**：单机单进程，无分布式；设备自动选择 CUDA/XPU/MPS/CPU；支持 bf16 autocast。
 
 ## 5. License
 
