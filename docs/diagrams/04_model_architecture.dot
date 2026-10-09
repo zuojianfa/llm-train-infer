@@ -1,0 +1,36 @@
+digraph ModelArchitecture {
+    rankdir=TB;
+    fontsize=12;
+    fontname="DejaVu Sans";
+    node [fontname="DejaVu Sans", fontsize=11, style="filled,rounded"];
+    edge [fontname="DejaVu Sans", fontsize=10];
+
+    // 输入
+    Input [label="Input Tokens\n[Batch, Seq_Len]\nint64 token IDs", fillcolor="#fff3e0", color="#f57c00"];
+    
+    // Embedding (权重共享)
+    Embedding [label="Token Embedding\nnn.Embedding(V, D)\n→ [B, S, D]\n↑━━━━━━━━━━━━━━━━━━━━━━↑\n权重共享\nWeight Tying\n(Press & Wolf 2017)", fillcolor="#e8f5e9", color="#388e3c", penwidth=2];
+    
+    // Transformer Blocks
+    Blocks [label="N × TransformerBlock\n(Pre-Norm 残差结构)\nL = num_layers (默认 8)", fillcolor="#e3f2fd", color="#1976d2", penwidth=2, shape=box];
+    
+    // Block 内部结构
+    BlockDetail [label="TransformerBlock 内部:\n\n┌─────────────────────────────────────┐\n│ x (残差主干)                        │\n│   │                                 │\n│   ▼ RMSNorm                         │\n│   │                                 │\n│   ▼ Attention (GQA + RoPE + KV Cache)\n│   │      │                          │\n│   │      ├── Q: wq(x) → H heads    │\n│   │      ├── K: wk(x) → H_kv heads │\n│   │      ├── V: wv(x) → H_kv heads │\n│   │      ├── RoPE 旋转位置编码      │\n│   │      ├── GQA: expand KV to H   │\n│   │      └── SDPA 融合注意力        │\n│   │                                 │\n│   ▼ x = x + attention_out  (残差 1) │\n│   │                                 │\n│   ▼ RMSNorm                         │\n│   │                                 │\n│   ▼ FeedForward (SwiGLU)            │\n│        gate = silu(w_gate(x))       │\n│        up   = w_up(x)               │\n│        down = w_down(gate * up)     │\n│   │                                 │\n│   ▼ x = x + ffn_out  (残差 2)       │\n└─────────────────────────────────────┘", shape=note, fillcolor="#e8f5e9", color="#388e3c", fontsize=9];
+    
+    // Final Norm
+    FinalNorm [label="Final RMSNorm\n归一化收尾\n→ [B, S, D]", fillcolor="#e8f5e9", color="#388e3c"];
+    
+    // LM Head
+    LMHead [label="LM Head (输出投影)\nnn.Linear(D, V, bias=False)\n→ logits [B, S, V]\n权重 = tok_embeddings.weight (共享)\n\nLogit Soft Cap (Gemma 风格)\nlogits = 50 * tanh(logits / 50)\n防止个别维度发散、破坏 bf16 训练", fillcolor="#fce4ec", color="#c2185b", penwidth=2];
+    
+    Output [label="Output Logits\n[Batch, Seq_Len, Vocab_Size]\nfloat32 (softmax/CE 数值稳定)", fillcolor="#fff3e0", color="#f57c00"];
+
+    // 关键组件
+    Components [label="核心组件详解:\n\n1. RMSNorm: LayerNorm 简化版\n   y = x / sqrt(mean(x²)+eps) * γ\n   无减均值、无 bias, 更快更稳\n\n2. RoPE 旋转位置编码\n   相邻两维看作 2D 向量, 按位置旋转\n   q·k 内积只依赖相对距离\n   支持外推到更长序列\n\n3. GQA (Grouped Query Attention)\n   Q: H 头, K/V: H_kv 头 (H_kv < H)\n   n_rep = H / H_kv 次复制 KV\n   推理 KV Cache 显存降 n_rep 倍\n\n4. SwiGLU FFN\n   down(silu(gate(x)) * up(x))\n   门控机制, 中间维 ≈ 8/3 * D\n\n5. KV Cache 增量解码\n   Prefill 填充, Decode 只算新 token\n   cat([cache, new], dim=2) 拼接\n   显式因果掩码保证正确性", shape=note, fillcolor="#ffffcc", color="#fbc02d", fontsize=9];
+
+    // 连接
+    Input -> Embedding -> Blocks -> FinalNorm -> LMHead -> Output;
+    Blocks -> BlockDetail [style=dashed];
+    LMHead -> Components [style=dashed];
+    Embedding -> LMHead [label="权重共享\n(节省 V×D 参数\n且通常涨点)", style=dashed, color="#388e3c", penwidth=2];
+}

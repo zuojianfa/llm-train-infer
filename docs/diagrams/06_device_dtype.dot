@@ -1,0 +1,33 @@
+digraph DeviceDtype {
+    rankdir=TB;
+    fontsize=12;
+    fontname="DejaVu Sans";
+    node [fontname="DejaVu Sans", fontsize=11, style="filled,rounded"];
+    edge [fontname="DejaVu Sans", fontsize=10];
+
+    Config [label="TrainConfig\ndevice=\"auto\"\ndtype=\"bfloat16\"", fillcolor="#f3e5f5", color="#7b1fa2"];
+    
+    AutoDetect [label="get_device(\"auto\")\n设备检测优先级:", fillcolor="#e3f2fd", color="#1976d2", shape=box];
+    
+    CUDA [label="1. CUDA GPU\ntorch.cuda.is_available()\n→ torch.device(\"cuda\")", fillcolor="#e8f5e9", color="#388e3c"];
+    XPU [label="2. Intel XPU\ntorch.xpu.is_available()\n→ torch.device(\"xpu\")", fillcolor="#e8f5e9", color="#388e3c"];
+    MPS [label="3. Apple MPS\ntorch.backends.mps.is_available()\n→ torch.device(\"mps\")", fillcolor="#e8f5e9", color="#388e3c"];
+    CPU [label="4. CPU (兜底)\n→ torch.device(\"cpu\")", fillcolor="#fff3e0", color="#f57c00"];
+    
+    DtypeMap [label="get_dtype(\"bfloat16\")\n\"bfloat16\" → torch.bfloat16\n\"float16\"  → torch.float16\n\"float32\"  → torch.float32", fillcolor="#fce4ec", color="#c2185b"];
+    
+    Autocast [label="torch.autocast 上下文管理器\nwith torch.autocast(device_type, dtype=dtype):\n    logits = model(x)  # 矩阵乘走 BF16\n    loss = CE(logits.float(), y)  # CE 强制 FP32\n\nenabled 条件:\ndevice ∈ {cuda, mps, xpu} 或 dtype ≠ float32\n\n作用:\n• 矩阵乘法 (GEMM) 自动用 BF16 (快、省显存)\n• Softmax/LayerNorm/累加 等数值敏感算子回退 FP32\n• 梯度计算、优化器步进保持 FP32 精度", fillcolor="#e8f5e9", color="#388e3c", shape=note];
+    
+    PrecisionFlow [label="精度流向:\n\nInput (int64) → Embedding (BF16 weight)\n    │\n    ▼\nTransformer Blocks (BF16 计算)\n    │   RMSNorm: x.float().pow(2).mean()...rsqrt()  # FP32 统计量\n    │   Attention: SDPA 内部自动混合精度\n    │   SwiGLU: silu/乘法/矩阵乘 BF16\n    │\n    ▼\nLM Head (BF16 weight, 共享 Embedding)\n    │\n    ▼\nLogits → .float() → FP32\n    │\n    ▼\nLogit Soft Cap: 50 * tanh(logits/50)  # FP32\n    │\n    ▼\nCrossEntropy(FP32 logits, int64 targets)\n    │\n    ▼\nLoss (FP32 scalar) → backward() → FP32 梯度\n    │\n    ▼\nAdamW (FP32 参数/动量) → step()\n    │\n    ▼\n参数更新后 .to(BF16) 存储", shape=note, fillcolor="#ffffcc", color="#fbc02d", fontsize=9];
+    
+    // 连接
+    Config -> AutoDetect;
+    AutoDetect -> CUDA;
+    AutoDetect -> XPU;
+    AutoDetect -> MPS;
+    AutoDetect -> CPU;
+    Config -> DtypeMap;
+    {CUDA XPU MPS CPU} -> Autocast;
+    DtypeMap -> Autocast;
+    Autocast -> PrecisionFlow [style=dashed];
+}

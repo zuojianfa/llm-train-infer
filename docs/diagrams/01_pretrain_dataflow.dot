@@ -1,0 +1,33 @@
+digraph PretrainDataFlow {
+    rankdir=TB;
+    fontsize=12;
+    fontname="DejaVu Sans";
+    node [fontname="DejaVu Sans", fontsize=11, style="filled,rounded"];
+    edge [fontname="DejaVu Sans", fontsize=10];
+
+    // 数据流节点
+    RawText [label="原始文本语料\ndata/train.txt\n(每行一段,空行跳过)", fillcolor="#fff3e0", color="#f57c00"];
+    
+    Tokenize [label="BPETokenizer.encode(行文本)\n逐行编码 + 追加 <eos>(id=0)\n→ List[int] token IDs", fillcolor="#e8f5e9", color="#388e3c"];
+    
+    Concat [label="TextDataset.from_file()\n拼接成单条长 token 流\nnp.uint32 零拷贝数组\n长度 = 总 token 数", fillcolor="#e8f5e9", color="#388e3c"];
+    
+    BatchSample [label="TextDataset.random_batch()\n随机采样 batch_size 个起点\n截取长度 seq_len+1 窗口\nx = window[:-1], y = window[1:]\n→ x[B,S], y[B,S] (右移一位)", fillcolor="#e3f2fd", color="#1976d2"];
+    
+    Forward [label="model.forward(x)\nLLMModel 前向传播\nEmbedding → N×TransformerBlock\n→ Norm → LM Head\n→ logits [B, S, V]", fillcolor="#fce4ec", color="#c2185b"];
+    
+    Loss [label="F.cross_entropy(logits, y)\nlogits.view(-1,V), y.view(-1)\nNext-Token Prediction Loss\nignore_index=-1 (预留padding)", fillcolor="#fce4ec", color="#c2185b"];
+    
+    Backward [label="loss.backward()\n梯度累积 gradient_accumulation_steps\nclip_grad_norm_(max_norm=1.0)\nAdamW.step() + lr_schedule", fillcolor="#f3e5f5", color="#7b1fa2"];
+    
+    Checkpoint [label="save_checkpoint()\nmodel.pt (权重) + meta.json (配置)\noptim.pt (优化器状态 + RNG)\nbest/ 仅保存最优 val_loss 权重", fillcolor="#fff3e0", color="#f57c00"];
+
+    // 连接
+    RawText -> Tokenize -> Concat -> BatchSample -> Forward -> Loss -> Backward;
+    Backward -> Checkpoint [label="每 save_interval 步"];
+    Backward -> BatchSample [label="下一 step", style=dashed];
+    
+    // 关键点标注
+    KeyPoint [label="关键设计:\n• 语料拼接成单条流,随机截窗\n• y = x 右移一位 = Next-Token 目标\n• <eos> 分隔文档,模型学会重置\n• 梯度累积等效大 batch,省显存\n• Loss 尖峰检测跳过异常更新\n• RNG 状态保存实现完全可复现续训", shape=note, fillcolor="#ffffcc", color="#fbc02d", fontsize=10];
+    BatchSample -> KeyPoint [style=dashed];
+}

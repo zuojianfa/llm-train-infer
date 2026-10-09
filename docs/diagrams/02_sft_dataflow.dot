@@ -1,0 +1,32 @@
+digraph SFTDataFlow {
+    rankdir=TB;
+    fontsize=12;
+    fontname="DejaVu Sans";
+    node [fontname="DejaVu Sans", fontsize=11, style="filled,rounded"];
+    edge [fontname="DejaVu Sans", fontsize=10];
+
+    // SFT 数据流节点
+    JSONL [label="指令配对数据 JSONL\ndata/sft_train.jsonl\n每行: {\"instruction\": \"...\", \"output\": \"...\"}", fillcolor="#fff3e0", color="#f57c00"];
+    
+    FormatEx [label="format_example()\nprompt = \"用户:{instruction}\\n助手:\"\ntarget = \"{output}\\n\"\n→ (prompt_str, target_str)", fillcolor="#e8f5e9", color="#388e3c"];
+    
+    Encode [label="分别编码\np_ids = tokenizer.encode(prompt)  # 不算 loss\nt_ids = tokenizer.encode(target) + [EOS]  # 算 loss", fillcolor="#e8f5e9", color="#388e3c"];
+    
+    Mask [label="构造 Loss Mask (核心差异)\nlabels = [-100] * len(p_ids) + t_ids\ninput_ids = p_ids + t_ids\n-100 = ignore_index (PyTorch/HF 惯例)", fillcolor="#ffebee", color="#c62828", penwidth=2];
+    
+    Dataset [label="SFTDataset 预编码所有样本\n存储 (input_ids, labels) 列表\nrandom_batch() 时 pad 到统一长度\ninput pad=0, label pad=-100", fillcolor="#e3f2fd", color="#1976d2"];
+    
+    Forward [label="model(x[:, :-1])  # 去掉最后一个 token\nlogits [B, S, V]", fillcolor="#fce4ec", color="#c2185b"];
+    
+    MaskedLoss [label="F.cross_entropy(..., ignore_index=-100)\n仅 answer 部分 (labels != -100) 产生梯度\nprompt 部分梯度为 0\n防止灾难性遗忘、模仿问句写法", fillcolor="#ffebee", color="#c62828", penwidth=2];
+    
+    TrainLoop [label="SFT 训练循环\n热启动: load_model(预训练 ckpt)\nlr = 3e-5 ~ 6e-5 (预训练 1/5~1/10)\n1-3 epochs, cosine decay\n梯度累积 + 裁剪 + 保存", fillcolor="#f3e5f5", color="#7b1fa2"];
+
+    // 对比节点
+    Compare [label="对比: 预训练 vs SFT\n┌──────────────┬───────────────┬──────────────┐\n│ 项目         │ 预训练        │ SFT          │\n├──────────────┼───────────────┼──────────────┤\n│ 数据格式     │ 连续文本流    │ 配对指令数据 │\n│ 标签构造     │ y = x >> 1    │ prompt=-100  │\n│ 学习目标     │ 建模语言分布  │ 学会遵循指令 │\n│ 学习率       │ 3e-4          │ 3e-5 ~ 6e-5  │\n│ 训练单位     │ steps         │ epochs       │\n│ 权重初始化   │ 随机          │ 预训练热启动 │\n└──────────────┴───────────────┴──────────────┘", shape=note, fillcolor="#ffffcc", color="#fbc02d", fontsize=9];
+
+    // 连接
+    JSONL -> FormatEx -> Encode -> Mask -> Dataset -> Forward -> MaskedLoss -> TrainLoop;
+    Mask -> Compare [style=dashed];
+    Dataset -> Compare [style=dashed];
+}

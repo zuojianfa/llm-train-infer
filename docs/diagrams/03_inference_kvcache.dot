@@ -1,0 +1,38 @@
+digraph InferenceFlow {
+    rankdir=TB;
+    fontsize=12;
+    fontname="DejaVu Sans";
+    node [fontname="DejaVu Sans", fontsize=11, style="filled,rounded"];
+    edge [fontname="DejaVu Sans", fontsize=10];
+
+    // 推理流程
+    UserPrompt [label="用户 Prompt\n\"人工智能\"", fillcolor="#fff3e0", color="#f57c00"];
+    
+    EncodePrompt [label="tokenizer.encode(prompt)\n→ List[int] [t0, t1, t2]", fillcolor="#e8f5e9", color="#388e3c"];
+    
+    // Prefill 阶段
+    Prefill [label="=== Prefill 阶段 (并行) ===\nmodel(input_ids, start_pos=0, caches=empty)\n• 计算全 prompt 所有位置的 Q, K, V\n• Attention: 因果掩码 (is_causal=True)\n• 输出: 最后位置 logits [1, 1, V]\n• 关键: 填充各层 KV Cache\n  cache_K, cache_V: [1, H_kv, T_prompt, hd]", fillcolor="#e3f2fd", color="#1976d2", penwidth=2];
+    
+    // Decode 循环
+    DecodeLoop [label="=== Decode 循环 (增量, 串行) ===\nfor step in range(max_new_tokens):", fillcolor="#fce4ec", color="#c2185b", penwidth=2, shape=box];
+    
+    Sample [label="_sample_next_token(logits, T, top_k, top_p)\n• T=0: greedy argmax\n• T>0: logits/T → softmax\n• Top-k: 保留概率最高 k 个\n• Top-p: 累计概率 ≥ p 的最小前缀\n• multinomial 采样 → next_token_id", fillcolor="#f3e5f5", color="#7b1fa2"];
+    
+    Append [label="generated.append(next_token)\nif next_token == EOS: break", fillcolor="#f3e5f5", color="#7b1fa2"];
+    
+    IncrementalForward [label="增量前向: model([[next_token]], start_pos=pos, caches=prev)\n• 只计算新 token 的 Q, K, V (S=1)\n• K, V 拼接缓存: cat([cache_K, new_K], dim=2)\n• Attention: Q 看完整 K/V (含历史缓存)\n• 显式因果掩码: 查询位置可看 ≤ 当前位置\n• 返回: 新 logits + 更新后的 caches\n• pos += 1", fillcolor="#e3f2fd", color="#1976d2"];
+    
+    KVCacheDetail [label="KV Cache 结构 (每层)\ncache_K: [B, H_kv, T_cached, hd]\ncache_V: [B, H_kv, T_cached, hd]\n总显存 ≈ L × 2 × T × H_kv × hd × B × 2(bytes/bf16)\nGQA: H_kv = H / n_rep, 显存再降 n_rep 倍", fillcolor="#e8f5e9", color="#388e3c", shape=note];
+    
+    DecodeOutput [label="tokenizer.decode(generated)\n增量解码避免重复\n片段流式产出 (打字机效果)\n→ 最终生成文本", fillcolor="#fff3e0", color="#f57c00"];
+    
+    // 无 KV Cache 对比
+    NoCache [label="无 KV Cache (对比)\n每步重新前向完整序列\nStep 1: 前向 1 token\nStep 2: 前向 2 tokens\n...\nStep T: 前向 T tokens\n总计算量: O(T²) → 极慢", shape=note, fillcolor="#ffebee", color="#c62828", fontsize=10];
+
+    // 连接
+    UserPrompt -> EncodePrompt -> Prefill -> DecodeLoop;
+    DecodeLoop -> Sample -> Append -> IncrementalForward -> DecodeLoop [label="下一步"];
+    Sample -> DecodeOutput [label="结束或达到 max_new_tokens"];
+    IncrementalForward -> KVCacheDetail [style=dashed];
+    DecodeLoop -> NoCache [style=dashed, label="对比"];
+}

@@ -1,0 +1,94 @@
+digraph ScriptsCallChain {
+    rankdir=LR;
+    fontsize=12;
+    fontname="DejaVu Sans";
+    node [fontname="DejaVu Sans", fontsize=10, style="filled,rounded"];
+    edge [fontname="DejaVu Sans", fontsize=9];
+
+    // 脚本层
+    subgraph cluster_scripts {
+        label="CLI 入口脚本 (scripts/)";
+        style="filled,rounded";
+        fillcolor="#f5f5f5";
+        color="#999";
+        fontsize=11;
+        
+        S1 [label="prepare_data.py\n下载/生成语料", fillcolor="#fff3e0", color="#f57c00"];
+        S2 [label="train_tokenizer.py\n训练 BPE 分词器", fillcolor="#fff3e0", color="#f57c00"];
+        S3 [label="train.py\n预训练主循环", fillcolor="#e3f2fd", color="#1976d2"];
+        S4 [label="eval.py\n验证集评估 PPL", fillcolor="#e3f2fd", color="#1976d2"];
+        S5 [label="generate.py\n交互式文本生成", fillcolor="#fce4ec", color="#c2185b"];
+        S6 [label="prepare_sft_data.py\n生成指令数据 JSONL", fillcolor="#e8f5e9", color="#388e3c"];
+        S7 [label="train_sft.py\nSFT 微调 (热启动)", fillcolor="#e8f5e9", color="#388e3c"];
+        S8 [label="serve.py\n启动 FastAPI 服务", fillcolor="#f3e5f5", color="#7b1fa2"];
+    }
+
+    // 核心库层
+    subgraph cluster_core {
+        label="核心库 (minillm/)";
+        style="filled,rounded";
+        fillcolor="#fafafa";
+        color="#999";
+        fontsize=11;
+        
+        C1 [label="tokenizer.py\nBPETokenizer\n(train/encode/decode/save/load)", fillcolor="#fff3e0", color="#f57c00"];
+        C2 [label="data.py\nTextDataset / SFTDataset\n(random_batch / fixed_batch)", fillcolor="#fff3e0", color="#f57c00"];
+        C3 [label="model.py\nLLMModel / Attention\nRMSNorm / RoPE / SwiGLU\nKV Cache", fillcolor="#e3f2fd", color="#1976d2"];
+        C4 [label="train.py\ntrain() / build_optimizer\nget_lr / save_checkpoint\nload_model / try_resume", fillcolor="#e3f2fd", color="#1976d2"];
+        C5 [label="evaluate.py\nevaluate_loss() / perplexity()", fillcolor="#e3f2fd", color="#1976d2"];
+        C6 [label="generate.py\nGenerator (stream/generate)\n_sample_next_token\nKV Cache 增量解码", fillcolor="#fce4ec", color="#c2185b"];
+        C7 [label="sft.py\nrun_sft() / SFTDataset\nformat_example / loss mask\n(-100 ignore_index)", fillcolor="#e8f5e9", color="#388e3c"];
+        C8 [label="serve.py\ncreate_app() / FastAPI\nformat_prompt (ChatML)\nOpenAI API 兼容", fillcolor="#f3e5f5", color="#7b1fa2"];
+        C9 [label="config.py\nModelConfig / TrainConfig\n参数量估算 / 序列化", fillcolor="#f3e5f5", color="#7b1fa2"];
+    }
+
+    // 连接: 脚本 -> 核心库
+    S1 -> C1 [label="basic_symbols等"];
+    S1 -> C2 [label="make_token_stream"];
+    
+    S2 -> C1 [label="BPETokenizer.train()\n.save()"];
+    
+    S3 -> C2 [label="TextDataset.from_file()"];
+    S3 -> C3 [label="LLMModel(cfg)"];
+    S3 -> C4 [label="train() / build_optimizer\nget_lr / save_checkpoint"];
+    S3 -> C5 [label="evaluate_loss()"];
+    S3 -> C9 [label="TrainConfig / ModelConfig"];
+    
+    S4 -> C3 [label="load_model()"];
+    S4 -> C5 [label="evaluate_loss()"];
+    S4 -> C2 [label="TextDataset"];
+    
+    S5 -> C3 [label="load_model()"];
+    S5 -> C1 [label="BPETokenizer.load()"];
+    S5 -> C6 [label="Generator.stream/generate()"];
+    
+    S6 -> C7 [label="生成 JSONL 格式"];
+    
+    S7 -> C3 [label="load_model() 热启动"];
+    S7 -> C1 [label="BPETokenizer.load()"];
+    S7 -> C7 [label="run_sft() / SFTDataset\nformat_example / evaluate_sft_loss"];
+    S7 -> C4 [label="build_optimizer / get_lr\nsave_checkpoint"];
+    
+    S8 -> C3 [label="load_model()"];
+    S8 -> C1 [label="BPETokenizer.load()"];
+    S8 -> C6 [label="Generator"];
+    S8 -> C8 [label="create_app() / format_prompt"];
+    
+    // 核心库内部依赖
+    C9 -> C3 [label="ModelConfig"];
+    C9 -> C4 [label="TrainConfig"];
+    C1 -> C2 [label="encode"];
+    C1 -> C6 [label="encode/decode"];
+    C1 -> C7 [label="encode"];
+    C1 -> C8 [label="encode/decode"];
+    C2 -> C4 [label="random_batch"];
+    C2 -> C5 [label="random_batch/fixed_batch"];
+    C2 -> C7 [label="SFTDataset"];
+    C3 -> C4 [label="forward / param_stats"];
+    C3 -> C5 [label="forward"];
+    C3 -> C6 [label="forward (with KV Cache)"];
+    C3 -> C7 [label="forward"];
+    C3 -> C8 [label="forward"];
+    C4 -> C7 [label="load_model / save_checkpoint"];
+    C6 -> C8 [label="Generator"];
+}

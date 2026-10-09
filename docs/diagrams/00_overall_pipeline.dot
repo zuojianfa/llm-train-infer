@@ -1,0 +1,32 @@
+digraph OverallPipeline {
+    rankdir=TB;
+    fontsize=12;
+    fontname="DejaVu Sans";
+    node [fontname="DejaVu Sans", fontsize=11, style="filled,rounded", fillcolor="#e3f2fd", color="#1976d2", penwidth=1.5];
+    edge [fontname="DejaVu Sans", fontsize=10, color="#555"];
+
+    // 阶段节点
+    P0 [label="阶段 0: 环境准备\npip install -r requirements.txt\n检查设备 CUDA/XPU/MPS/CPU"];
+    P1 [label="阶段 1: 语料准备\nscripts/prepare_data.py\n下载/回退内置双语语料\n→ data/train.txt, data/val.txt"];
+    P2 [label="阶段 2: 分词器训练\nscripts/train_tokenizer.py\nBPETokenizer.train()\n→ out/tokenizer.json"];
+    P3 [label="阶段 3: 预训练\nscripts/train.py\nNext-Token Prediction\nAdamW + Cosine + 梯度累积\n→ out/ckpt/model.pt"];
+    P4 [label="阶段 4: 评估验证集\nscripts/eval.py\n计算 PPL (Perplexity)\nval_loss, val_ppl"];
+    P5 [label="阶段 5: 文本生成/推理\nscripts/generate.py\nKV Cache 增量解码\nTemperature / Top-k / Top-p"];
+    P6 [label="阶段 6: SFT 监督微调\nscripts/train_sft.py\n热启动预训练权重\nLoss Mask (prompt=-100)\n→ out/sft/ckpt/"];
+    P7 [label="阶段 7: HTTP 推理服务\nscripts/serve.py\nFastAPI + uvicorn\nOpenAI Chat Completions 兼容\n流式 SSE 响应"];
+
+    // 核心库依赖
+    Core [label="核心库 minillm/\nconfig.py | tokenizer.py | data.py\nmodel.py | train.py | evaluate.py\ngenerate.py | sft.py | serve.py",
+          fillcolor="#f3e5f5", color="#7b1fa2", shape=box];
+
+    // 流程连接
+    P0 -> P1 -> P2 -> P3;
+    P3 -> P4;
+    P3 -> P5;
+    P3 -> P6;
+    P6 -> P5;
+    P6 -> P7;
+
+    // 核心库支撑所有阶段
+    {P1 P2 P3 P4 P5 P6 P7} -> Core [style=dashed, color="#7b1fa2", label="依赖"];
+}
